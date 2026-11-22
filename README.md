@@ -13,7 +13,7 @@ DeepSeek Harness（DSH）Web 启动器 `DSH-Web-Launcher.cmd` 及其**启动期�
 | `launcher/dsh-web-boot.mts` | 引导器：`dsh --profile web --no-open`，抓取带 token 的登录 URL 再开浏览器 | `%USERPROFILE%\.dsh\` |
 | `hooks/*.mts` | 6 个启动期补丁（全部幂等，`npm install -g` 覆盖后自动重打） | `%USERPROFILE%\.dsh\` |
 | `tools/verify-launcher-channel.mts` | 干跑验证：沙箱副本 + 副作用替换，验证启动器三个分支 | `%USERPROFILE%\.dsh\` |
-| `retired/*.mts` | 已停止调用的脚本（保留供回归复用，不部署） | — |
+| `retired/*.mts` | 已停止调用的脚本（保留供回归复用，不部署）；运行位置的副本已移入 `%USERPROFILE%\.dsh\launcher-backups\retired\` | — |
 | `PATCHES.md` | 补丁台账：每条修什么、证据、复验命令、失效判据 | — |
 
 ## 启动流程
