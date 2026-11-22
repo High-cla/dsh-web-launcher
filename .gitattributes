@@ -1,0 +1,4 @@
+*.cmd text eol=crlf
+*.mts text eol=lf
+*.md text eol=lf
+.gitattributes eol=lf
