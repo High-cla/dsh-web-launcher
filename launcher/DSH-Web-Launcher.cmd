@@ -143,6 +143,25 @@ if exist "%USERPROFILE%\.dsh\profiles\web\node_modules\dsh-live-compact\gate.js"
     if errorlevel 1 echo [warn] live-compact gate patch failed - preset mcp-opt may fall back to native compaction.
 )
 
+rem A（2026-11-27）bili 并存压缩器扫描：会话里每次启动都会把 dsh-live-compact 记进冲突账本
+rem   日志行 `[conflict] co-resident compression plugin detected`，活跃窗口 7 天，每开一个会话多一条。
+rem   开关只有环境变量 BILI_CONFLICT_SCAN（billion-context/dist/index.js 的 conflictScanEnabled：
+rem   值为 0/false 才关），没有配置键；dsh 0.2.2-rc.5 也不读 ~/.dsh/.env（实测 lib 无 env 文件加载器），
+rem   所以只能在启动器里 set，由子进程（node dsh-web-boot.mts -> dsh --profile web）继承，不写注册表。
+rem   if not defined 尊重已有用户级设置；想恢复扫描：setx BILI_CONFLICT_SCAN 1 后重启。
+if not defined BILI_CONFLICT_SCAN set "BILI_CONFLICT_SCAN=0"
+
+rem B（2026-11-27）spine 自动大压缩：dsh-live-compact 默认 auto:true + thresholdRatio 0.8，本地历史超窗时
+rem   交棒官方大压缩（@deepseek-ai/dsh-compaction-basic 声明 purpose="compaction"），bili 无条件拒绝它，
+rem   日志每次一行 REFUSED, not forwarded。钩子把 profile 的 compaction-spine 幂等改成 auto:false，
+rem   同时保留 takeoverPresets: true（id-targeted patch 整份替换 config，漏写会让 spine 不再接管 preset）。
+rem   轮后本地小切不依赖 auto，ACP 压缩仍归 bili；想恢复上游行为：setx DSH_SPINE_AUTO on（钩子跳过）。
+if exist "%USERPROFILE%\.dsh\patch-live-compact-auto-off.mts" (
+    echo [patch] check spine auto-off...
+    node "%USERPROFILE%\.dsh\patch-live-compact-auto-off.mts"
+    if errorlevel 1 echo [warn] spine auto-off patch failed - native compaction may still be refused by bili.
+)
+
 echo [3/3] starting DSH Web - http://127.0.0.1:3080 ...
 rem dsh prints a single token-bearing login URL and only that URL passes auth; opening the bare http://127.0.0.1:3080 always 401s.
 rem dsh-web-boot.mts starts with --no-open, captures that URL and opens it in the default browser (single opener, avoids wrong/duplicate tabs).

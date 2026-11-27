@@ -16,7 +16,7 @@ diff -u "$T/x/package/lib/index.js" "%APPDATA%/npm/node_modules/@deepseek-ai/dsh
 
 > npm 是原生 Windows 程序：`--pack-destination` 必须给 `C:/...` 形式，给 MSYS 的 `/tmp/...` 会以 `C:\tmp\...` 解析并以 ENOENT 失败。
 
-## 保留（6 个，启动器逐个调用）
+## 保留（7 个，启动器逐个调用）
 
 | 钩子 | 修什么 | 目标文件 | 纯净包状态 |
 |---|---|---|---|
@@ -26,6 +26,7 @@ diff -u "$T/x/package/lib/index.js" "%APPDATA%/npm/node_modules/@deepseek-ai/dsh
 | `patch-pi-ai-output-clamp.mts` | 本地历史估算超窗 → 输出预算塌成 1/16，回复被截断 | `@earendil-works/pi-ai/dist/api/simple-options.js` | 未修 |
 | `patch-subprocess-terminal-pid.mts` | ① node-pty 构造期 `pid=0` → `terminal_close` 报 `surviving pid: 0`；② 打包 conpty.dll 宿主不执行命令 | `dsh-subprocess-local/lib/index.js` | 均未修 |
 | `patch-live-compact-gate.mts` | `gate.js` 的 `PRESET_IDS` 缺 `mcp-opt`，默认 preset 的压缩接管失效 | `profiles/web/node_modules/dsh-live-compact/gate.js` | 未修 |
+| `patch-live-compact-auto-off.mts` | spine 超窗交棒官方大压缩，被 bili 无条件拒绝并刷 warn | `profiles/web/cordis.patch.yml` 的 `compaction-spine` 项 | 上游默认 `auto: true`（`dsh-live-compact/settings.js`） |
 
 ### 1. patch-dsh-install-heal.mts
 
@@ -73,6 +74,24 @@ diff -u "$T/x/package/lib/index.js" "%APPDATA%/npm/node_modules/@deepseek-ai/dsh
 - 做法：向 `PRESET_IDS` 追加 `mcp-opt` / `preset-mcp-opt`；纯字符串补丁，不动逻辑。
 - 复验：`node …patch-live-compact-gate.mts --check` → `SKIP  PRESET_IDS already has mcp-opt / preset-mcp-opt`，exit 0。
 - 守卫：启动器只在 `profiles/web/node_modules/dsh-live-compact/gate.js` 存在时才调用它（否则脚本按设计 exit 1，不该每次启动打假警告）。
+
+### 7. patch-live-compact-auto-off.mts（2026-11-27 新增）
+
+- 症状：bili 日志每轮一行 `dsh native compaction call identified ... REFUSED, not forwarded`（本机基线 3 条）。
+- 根因：spine 引擎默认 `auto: true` + `thresholdRatio: 0.8`（`profiles/web/node_modules/dsh-live-compact/settings.js`，实测 grep 到 `auto: true` / `thresholdRatio: 0.8`），本地历史超窗时 `super.summarize()` 交棒原生大压缩；`@deepseek-ai/dsh-compaction-basic` 在 `lib/index.js:320` 声明 `purpose: "compaction"`，而 bili 无条件拒收该 purpose。
+- 做法：把 profile 的 `compaction-spine` 项幂等改成 `config: { takeoverPresets: true, auto: false }`（没有该项则追加到文件末尾）。**必须重述 `takeoverPresets`**：id-targeted patch 整份替换 `config`，漏写会让 spine 不再接管 preset 压缩引擎。钩子会先定位块、就地补键，不整篇重写；改前备份、原子替换、写完回读自检、失败回滚。
+- 复验：`node %USERPROFILE%\.dsh\patch-live-compact-auto-off.mts --check` → exit 0（已应用）；`dsh --profile web --dump-config | grep -A4 'id: compaction-spine'` → 同时出现 `takeoverPresets: true` 与 `auto: false`（2026-11-27 实测落在 dump 的 `:1814-1818`）。
+- 逃生舱：`DSH_SPINE_AUTO=on`（钩子跳过，恢复上游 auto 行为）。
+- 取舍：超过窗口上限时不再有官方大压缩兜底，只剩 bili ACP 压缩 + spine 轮后小切。
+
+### 8. `BILI_CONFLICT_SCAN=0`（不是钩子：写在启动器里，2026-11-27 新增）
+
+- 症状：每个会话启动时 bili 记一条 `[conflict] co-resident compression plugin detected on dsh: dsh-live-compact`（`~/.local/state/billion-context/bili.log`，本机基线 13 条）。该事件活跃窗口 `7*24h`：2026-11-21 那条到 `2026-11-28T03:59:55Z` 自然过期——**本项只阻止新增，不清理旧事件**。
+- 根因：`billion-context/dist/index.js` 的 `conflictScanEnabled(env = process.env) { const v2 = env.BILI_CONFLICT_SCAN?.trim().toLowerCase(); return !(v2 === '0' || v2 === 'false') }`，且调用处传的就是 `process.env` —— 只有环境变量开关，**没有配置键**。
+- 为什么不是钩子：环境变量必须存在于 dsh 进程本身。钩子是启动器拉起的子进程，改不了父进程 env；`~/.dsh/.env` 也**不被 dsh 读取**（实测 dsh `lib` 里 `loadEnvFile|dotenv|parseEnvFile` 0 命中；`.env` 字面量只出现在 `dsh-web-frontend/dist/assets/index-Ciz7DZxv.js` 的文件图标映射表）。bili 自己只读 `$CODEX_HOME/.env`（默认 `~/.codex/.env`），那是它的 route overlay 用途，与 `BILI_CONFLICT_SCAN` 无关。
+- 做法：启动器里 `if not defined BILI_CONFLICT_SCAN set "BILI_CONFLICT_SCAN=0"` —— 尊重用户已有的用户级设置，不写注册表；`dsh-web-boot.mts` 用 `{...process.env}` 起子进程，变量天然继承。
+- 复验：重启后开一个新会话跑一轮，`grep -c 'co-resident compression plugin' ~/.local/state/billion-context/bili.log` 不再增长（历史行保留）。
+- 恢复扫描：`setx BILI_CONFLICT_SCAN 1` 后重启；或把启动器里那行 `if not defined` 删掉。
 
 ## 已移除（2 个钩子 + 4 段注释，2026-11-22）
 
